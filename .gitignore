@@ -1,0 +1,61 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.so
+quantum-brain/venv/
+quantum-brain/.venv/
+
+# Node / Frontend
+node_modules/
+consciousness-interface/node_modules/
+dist/
+consciousness-interface/dist/
+.vite/
+consciousness-interface/.vite/
+
+# Logs
+*.log
+system-diary/logs/
+*.pid
+backend.pid
+frontend.pid
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Tauri build artifacts
+consciousness-interface/src-tauri/target/
+
+# Archive
+*.tar.gz
+*.zip
+
+# Memory / data (runtime)
+memory-palace/
+mnt/
