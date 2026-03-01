@@ -425,7 +425,8 @@ Assist me with technical precision and zero hesitation.
                     "When describing commands or operations, be specific and include exact command syntax. "
                     "Current working directory: " + os.getcwd()
                 )
-                messages = [{"role": "user", "content": content}]
+                history = task.get("history", [])
+                messages = history + [{"role": "user", "content": content}]
                 result = await integration.complete(
                     agent_id=self.agent_id,
                     messages=messages,

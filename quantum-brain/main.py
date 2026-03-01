@@ -27,6 +27,7 @@ from integrations.gpt4all.listener import GPT4AllListener
 from integrations.siri.connector import SiriConnector
 from agents import get_registry
 from engines.reasoning.pipeline import ReasoningPipeline
+from memory import MemoryManager
 
 # Configure logging
 logging.basicConfig(
@@ -511,6 +512,53 @@ class SpeakRequest(BaseModel):
     text: str
     rate: Optional[int] = 175   # words per minute
     volume: Optional[float] = 1.0
+
+# ============================================================================
+# Memory API Endpoints
+# ============================================================================
+
+@app.get("/api/memory")
+async def memory_summary():
+    """Return exchange counts for all agents — shows who you've talked to most."""
+    return {
+        "status": "success",
+        "exchanges": agent_registry.memory.summary(),
+        "window": "last 20 exchanges injected per prompt",
+    }
+
+@app.get("/api/memory/{agent_id}")
+async def get_agent_memory(agent_id: str, limit: int = 40):
+    """Retrieve recent conversation history for a specific agent."""
+    history = agent_registry.memory.get_full_history(agent_id)
+    if limit:
+        history = history[-limit:]
+    return {
+        "agent": agent_id,
+        "total_messages": len(history),
+        "history": history,
+    }
+
+@app.delete("/api/memory/{agent_id}")
+async def clear_agent_memory(agent_id: str):
+    """Wipe an agent's conversation memory — fresh start."""
+    count = agent_registry.memory.clear(agent_id)
+    return {
+        "status": "cleared",
+        "agent": agent_id,
+        "exchanges_removed": count,
+    }
+
+@app.delete("/api/memory")
+async def clear_all_memory():
+    """Wipe memory for all agents."""
+    summary = agent_registry.memory.summary()
+    for agent_id in list(summary.keys()):
+        agent_registry.memory.clear(agent_id)
+    return {
+        "status": "all_cleared",
+        "agents_cleared": list(summary.keys()),
+    }
+
 
 @app.post("/api/voice/speak")
 async def voice_speak(request: SpeakRequest):

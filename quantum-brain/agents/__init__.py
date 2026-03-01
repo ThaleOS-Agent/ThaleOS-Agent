@@ -6,6 +6,7 @@ All nine quantum agents, wired to LLM integrations via activation spell handshak
 import logging
 from typing import Dict, Any, Optional
 
+from memory import MemoryManager
 from .thaelia.agent import ThaeliaAgent
 from .chronagate.agent import ChronogateAgent
 from .utilix.agent import UtilixAgent
@@ -27,6 +28,7 @@ class AgentRegistry:
 
     def __init__(self, integration_manager=None):
         self._integration_manager = integration_manager
+        self._memory = MemoryManager()
         self._agents: Dict[str, Any] = {
             "thaelia":    ThaeliaAgent(),
             "chronagate": ChronogateAgent(),
@@ -63,6 +65,8 @@ class AgentRegistry:
     ) -> Dict[str, Any]:
         """
         Invoke an agent with a task.
+        Injects conversation history from MemoryManager before the call,
+        then persists the exchange after.
         The activation spell handshake is managed by the integration layer.
         """
         agent = self.get(agent_id)
@@ -75,6 +79,11 @@ class AgentRegistry:
 
         integration = self._get_integration(preferred_integration)
 
+        # Inject recent memory into the task so agents can pass it to the LLM
+        user_content = task.get("content", task.get("task", ""))
+        if user_content and "history" not in task:
+            task = {**task, "history": self._memory.get_recent_messages(agent_id)}
+
         if hasattr(agent, "process_task"):
             import inspect
             sig = inspect.signature(agent.process_task)
@@ -85,7 +94,16 @@ class AgentRegistry:
         else:
             return {"status": "error", "error": f"Agent {agent_id} has no process_task method"}
 
+        # Persist the exchange
+        response_text = result.get("response", "")
+        if user_content and response_text:
+            self._memory.append(agent_id, user_content, response_text)
+
         return {"status": "success", **result}
+
+    @property
+    def memory(self) -> MemoryManager:
+        return self._memory
 
 
 # Singleton — created after integration manager is available

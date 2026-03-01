@@ -93,7 +93,8 @@ Help me write with clarity, elegance, and intentional power.
         )
 
         if integration and integration.is_available():
-            messages = [{"role": "user", "content": content_request}]
+            history = task.get("history", [])
+            messages = history + [{"role": "user", "content": content_request}]
             result = await integration.complete(
                 agent_id=self.agent_id,
                 messages=messages,

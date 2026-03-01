@@ -83,7 +83,8 @@ Assist me with analytical depth and probabilistic honesty.
             additional_context += f"\n\nProvided data analysis:\n{trend}"
 
         if integration and integration.is_available():
-            messages = [{"role": "user", "content": query}]
+            history = task.get("history", [])
+            messages = history + [{"role": "user", "content": query}]
             result = await integration.complete(
                 agent_id=self.agent_id,
                 messages=messages,
