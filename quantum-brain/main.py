@@ -24,6 +24,7 @@ import uvicorn
 # ThaleOS subsystems
 from integrations import manager as integration_manager
 from integrations.gpt4all.listener import GPT4AllListener
+from integrations.siri.connector import SiriConnector
 from agents import get_registry
 
 # Configure logging
@@ -90,6 +91,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 agent_registry = get_registry(integration_manager)
+siri_connector = SiriConnector()
 
 
 async def _handle_listener_message(message: dict) -> dict:
@@ -399,6 +401,73 @@ async def utilix_run(payload: Dict[str, Any]):
     """Direct UTILIX computer use — runs shell commands, file ops, system info"""
     result = await agent_registry.invoke("utilix", payload)
     return result
+
+
+# ============================================================================
+# Siri Integration Endpoint
+# ============================================================================
+
+class SiriMessage(BaseModel):
+    content: str
+    agent: Optional[str] = None
+    source: Optional[str] = "siri"
+
+@app.post("/api/siri/message")
+async def siri_message(message: SiriMessage):
+    """
+    Receive voice input from an Apple Siri Shortcut.
+    Parses the voice command, routes to the correct agent,
+    and returns a speech-optimised response for Siri to read aloud.
+    """
+    parsed = siri_connector.parse_voice_command(message.content)
+    agent_id = message.agent or parsed["agent"]
+    task = {"content": parsed["content"]}
+
+    result = await agent_registry.invoke(agent_id, task)
+    raw_response = result.get("response", "I'm sorry, I couldn't process that.")
+    spoken = siri_connector.format_for_speech(raw_response)
+
+    logger.info(f"[siri] agent={agent_id} input={message.content[:60]!r}")
+    return {
+        "status": "success",
+        "agent": agent_id,
+        "response": spoken,
+        "raw": raw_response,
+        "source": message.source,
+    }
+
+@app.get("/api/siri/shortcut-config")
+async def siri_shortcut_config(host: str = "localhost", port: int = 8099):
+    """Returns the Siri Shortcut setup configuration"""
+    return siri_connector.get_shortcut_config(host=host, port=port)
+
+
+# ============================================================================
+# Qwant Search Endpoint
+# ============================================================================
+
+class SearchRequest(BaseModel):
+    query: str
+    type: Optional[str] = "web"
+    count: Optional[int] = 5
+    locale: Optional[str] = "en_GB"
+
+@app.post("/api/search")
+async def qwant_search(request: SearchRequest):
+    """
+    Privacy-first web search via Qwant — no tracking, no filter bubble.
+    Used by ORACLE and SAGE to ground responses in live data.
+    """
+    qwant = integration_manager.get("qwant")
+    if not qwant or not qwant.is_available():
+        raise HTTPException(status_code=503, detail="Qwant search unavailable (httpx not installed)")
+    results = await qwant.search(
+        query=request.query,
+        search_type=request.type,
+        count=request.count,
+        locale=request.locale,
+    )
+    return results
 
 # ============================================================================
 # WebSocket Endpoint

@@ -12,6 +12,10 @@ from .claude.connector import ClaudeConnector
 from .gpt.connector import GPTConnector
 from .gpt4all.connector import GPT4AllConnector
 from .perplexity.connector import PerplexityConnector
+from .grok.connector import GrokConnector
+from .qwant.connector import QwantConnector
+from .copilot.connector import CopilotConnector
+from .siri.connector import SiriConnector
 
 logger = logging.getLogger("ThaleOS.Integrations")
 
@@ -33,6 +37,10 @@ class IntegrationManager:
         self._integrations["gpt"] = GPTConnector()
         self._integrations["gpt4all"] = GPT4AllConnector()
         self._integrations["perplexity"] = PerplexityConnector()
+        self._integrations["grok"] = GrokConnector()
+        self._integrations["qwant"] = QwantConnector()
+        self._integrations["copilot"] = CopilotConnector()
+        self._integrations["siri"] = SiriConnector()
 
         available = [k for k, v in self._integrations.items() if v.is_available()]
         logger.info(f"Integrations loaded. Available: {available or ['none — configure API keys']}")
@@ -62,7 +70,7 @@ class IntegrationManager:
         return {
             name: {
                 "available": integration.is_available(),
-                "model": integration.model,
+                "model": getattr(integration, "model", "n/a"),
             }
             for name, integration in self._integrations.items()
         }
