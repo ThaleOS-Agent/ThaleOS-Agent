@@ -2,29 +2,60 @@ import React, { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Sparkles, Clock, Brain, FileText, TrendingUp, Shield, BookOpen, Briefcase, Scale } from 'lucide-react'
 import { useThaleOSStore } from '../store/thaleosStore'
+import { useAuthStore } from '../store/authStore'
 
-const agentDefs = [
-  { id: 'thaelia', name: 'THAELIA', role: 'Harmonic Resonance Empress', icon: Sparkles, color: 'from-mystical-500 to-purple-600', capabilities: ['guidance', 'wisdom', 'quantum_reasoning', 'empathy'] },
-  { id: 'chronagate', name: 'CHRONAGATE', role: 'Time Orchestration Master', icon: Clock, color: 'from-blue-500 to-cyan-600', capabilities: ['scheduling', 'time_management', 'task_breakdown', 'calendar_sync'] },
-  { id: 'utilix', name: 'UTILIX', role: 'Infrastructure Specialist', icon: Brain, color: 'from-gray-500 to-slate-600', capabilities: ['deployment', 'file_management', 'configuration', 'system_admin'] },
-  { id: 'scribe', name: 'SCRIBE', role: 'Professional Document Creator', icon: FileText, color: 'from-yellow-500 to-orange-600', capabilities: ['writing', 'documentation', 'social_media', 'branding'] },
-  { id: 'oracle', name: 'ORACLE', role: 'Predictive Intelligence', icon: TrendingUp, color: 'from-violet-500 to-indigo-600', capabilities: ['prediction', 'analysis', 'financial_modeling', 'strategic_planning'] },
-  { id: 'phantom', name: 'PHANTOM', role: 'Stealth Operations Specialist', icon: Shield, color: 'from-gray-700 to-slate-900', capabilities: ['background_ops', 'security_research', 'ethical_hacking', 'stealth'] },
-  { id: 'sage', name: 'SAGE', role: 'Research & Knowledge Synthesis', icon: BookOpen, color: 'from-emerald-500 to-teal-600', capabilities: ['research', 'synthesis', 'academic_writing', 'analysis'] },
-  { id: 'nexus', name: 'NEXUS', role: 'Financial & Business Intelligence', icon: Briefcase, color: 'from-blue-600 to-indigo-700', capabilities: ['financial_analysis', 'business_strategy', 'market_research', 'planning'] },
-  { id: 'scales', name: 'SCALES', role: 'Legal Intelligence', icon: Scale, color: 'from-amber-600 to-yellow-700', capabilities: ['legal_drafting', 'contract_review', 'litigation_prep', 'legal_research'] },
-]
+const AGENT_ICONS = {
+  thaelia:    { icon: Sparkles, color: 'from-mystical-500 to-purple-600' },
+  chronagate: { icon: Clock,    color: 'from-blue-500 to-cyan-600' },
+  utilix:     { icon: Brain,    color: 'from-gray-500 to-slate-600' },
+  scribe:     { icon: FileText, color: 'from-yellow-500 to-orange-600' },
+  oracle:     { icon: TrendingUp, color: 'from-violet-500 to-indigo-600' },
+  phantom:    { icon: Shield,   color: 'from-gray-700 to-slate-900' },
+  sage:       { icon: BookOpen, color: 'from-emerald-500 to-teal-600' },
+  nexus:      { icon: Briefcase, color: 'from-blue-600 to-indigo-700' },
+  scales:     { icon: Scale,    color: 'from-amber-600 to-yellow-700' },
+}
+
+const FLAG_LABELS = {
+  can_execute_code:   { label: 'Execute Code', color: 'bg-red-900/60 text-red-300 border-red-700' },
+  can_write_files:    { label: 'Write Files',  color: 'bg-orange-900/60 text-orange-300 border-orange-700' },
+  requires_admin:     { label: 'Admin Only',   color: 'bg-purple-900/60 text-purple-300 border-purple-700' },
+  can_search_web:     { label: 'Web Search',   color: 'bg-blue-900/60 text-blue-300 border-blue-700' },
+  can_export_documents: { label: 'Export Docs', color: 'bg-green-900/60 text-green-300 border-green-700' },
+}
+
+function CapabilityBadge({ flagKey }) {
+  const def = FLAG_LABELS[flagKey]
+  if (!def) return null
+  return (
+    <span className={`text-xs border rounded px-2 py-0.5 ${def.color}`}>
+      {def.label}
+    </span>
+  )
+}
 
 function Agents() {
-  const { invokeAgent } = useThaleOSStore()
+  const { agents, fetchAgents, invokeAgent } = useThaleOSStore()
+  const { user } = useAuthStore()
 
-  const handleInvoke = async (agentId) => {
+  useEffect(() => {
+    fetchAgents()
+  }, [])
+
+  const handleInvoke = async (agentId, requiresAdmin) => {
+    if (requiresAdmin && user?.role !== 'admin') {
+      alert('This agent requires admin role.')
+      return
+    }
     try {
       await invokeAgent(agentId, 'Hello, introduce yourself.')
     } catch (e) {
       console.error(e)
     }
   }
+
+  // Fall back to hardcoded list if API hasn't loaded yet
+  const displayAgents = agents?.length > 0 ? agents : Object.keys(AGENT_ICONS).map(id => ({ id }))
 
   return (
     <motion.div
@@ -35,34 +66,63 @@ function Agents() {
     >
       <h1 className="text-2xl font-display font-bold">Quantum Agents</h1>
       <div className="grid grid-cols-1 gap-4">
-        {agentDefs.map((agent) => {
-          const Icon = agent.icon
+        {displayAgents.map((agent) => {
+          const meta = AGENT_ICONS[agent.id] || { icon: Sparkles, color: 'from-gray-500 to-gray-700' }
+          const Icon = meta.icon
+          const flags = agent.capability_flags || {}
+          const activeFlags = Object.entries(flags).filter(([, v]) => v).map(([k]) => k)
+          const requiresAdmin = flags.requires_admin
+
           return (
             <motion.div
               key={agent.id}
               whileHover={{ scale: 1.01 }}
-              className="bg-black/30 backdrop-blur-lg rounded-xl p-5 border border-white/10 flex items-center space-x-4"
+              className="bg-black/30 backdrop-blur-lg rounded-xl p-5 border border-white/10 flex items-start space-x-4"
             >
-              <div className={`w-14 h-14 rounded-xl bg-gradient-to-r ${agent.color} flex items-center justify-center flex-shrink-0`}>
+              <div className={`w-14 h-14 rounded-xl bg-gradient-to-r ${meta.color} flex items-center justify-center flex-shrink-0`}>
                 <Icon className="w-7 h-7" />
               </div>
-              <div className="flex-1">
-                <div className="font-semibold">{agent.name}</div>
-                <div className="text-sm text-gray-400">{agent.role}</div>
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {agent.capabilities.map(cap => (
-                    <span key={cap} className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-gray-300">
-                      {cap.replace('_', ' ')}
-                    </span>
-                  ))}
-                </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold">{agent.display_name || agent.id.toUpperCase()}</div>
+                <div className="text-sm text-gray-400">{agent.role || ''}</div>
+                {agent.description && (
+                  <div className="text-xs text-gray-500 mt-1 truncate">{agent.description}</div>
+                )}
+
+                {/* Capability flag badges */}
+                {activeFlags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {activeFlags.map(flag => (
+                      <CapabilityBadge key={flag} flagKey={flag} />
+                    ))}
+                  </div>
+                )}
+
+                {/* Tool chips */}
+                {agent.tools?.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {agent.tools.map(t => (
+                      <span key={t} className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-gray-400">
+                        {t.replace(/_/g, ' ')}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
-              <button
-                onClick={() => handleInvoke(agent.id)}
-                className="px-4 py-2 bg-quantum-600 hover:bg-quantum-500 rounded-lg text-sm transition-colors flex-shrink-0"
-              >
-                Invoke
-              </button>
+
+              <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                {agent.status === 'standby' && (
+                  <span className="text-xs text-yellow-400 border border-yellow-700 rounded px-2 py-0.5">standby</span>
+                )}
+                <button
+                  onClick={() => handleInvoke(agent.id, requiresAdmin)}
+                  disabled={requiresAdmin && user?.role !== 'admin'}
+                  className="px-4 py-2 bg-quantum-600 hover:bg-quantum-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-sm transition-colors"
+                  title={requiresAdmin && user?.role !== 'admin' ? 'Requires admin role' : ''}
+                >
+                  Invoke
+                </button>
+              </div>
             </motion.div>
           )
         })}

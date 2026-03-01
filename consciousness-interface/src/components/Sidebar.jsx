@@ -1,7 +1,7 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Home, MessageSquare, Users, FileText, Calendar, Settings, Zap, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Home, MessageSquare, Users, FileText, Calendar, CalendarDays, Settings, Zap, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const navItems = [
   { path: '/', icon: Home, label: 'Dashboard' },
@@ -9,6 +9,7 @@ const navItems = [
   { path: '/agents', icon: Users, label: 'Agents' },
   { path: '/documents', icon: FileText, label: 'Documents' },
   { path: '/schedule', icon: Calendar, label: 'Schedule' },
+  { path: '/calendar', icon: CalendarDays, label: 'Calendar' },
   { path: '/settings', icon: Settings, label: 'Settings' },
 ]
 

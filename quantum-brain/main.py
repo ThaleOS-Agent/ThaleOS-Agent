@@ -9,25 +9,37 @@ Port: 8099
 from dotenv import load_dotenv
 load_dotenv()  # loads quantum-brain/.env into os.environ before anything else
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import asyncio
 import json
 import logging
-from datetime import datetime
+import uuid
+import hashlib
+from datetime import datetime, timezone
 import uvicorn
 
 # ThaleOS subsystems
+import db
 from integrations import manager as integration_manager
 from integrations.gpt4all.listener import GPT4AllListener
 from integrations.siri.connector import SiriConnector
 from agents import get_registry
 from engines.reasoning.pipeline import ReasoningPipeline
 from memory import MemoryManager
+from auth import (
+    hash_password, verify_password,
+    create_access_token, create_refresh_token,
+    decode_refresh_token, hash_token,
+    get_current_user, require_role, optional_auth,
+    UserCreate, UserLogin, TokenResponse, UserOut,
+)
+from auth.models import RefreshRequest
 
 # Configure logging
 logging.basicConfig(
@@ -122,6 +134,14 @@ class ChatMessage(BaseModel):
     timestamp: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = {}
 
+class ArtifactCreate(BaseModel):
+    artifact_type: str   # code | markdown | html | react | diagram | docx
+    title: str
+    content: str
+    language: Optional[str] = None  # for code type
+    agent_id: Optional[str] = "thaelia"
+    parent_id: Optional[str] = None
+
 class AgentRequest(BaseModel):
     agent: str
     task: str
@@ -204,13 +224,24 @@ async def system_status():
 # ============================================================================
 
 @app.post("/api/agents/invoke")
-async def invoke_agent(request: AgentRequest):
+async def invoke_agent(
+    request: AgentRequest,
+    user: dict = Depends(get_current_user),
+):
     """Invoke a specific agent with a task — real LLM call with activation spell handshake"""
-    logger.info(f"🤖 Invoking agent: {request.agent} | Task: {request.task[:80]}")
+    # UTILIX has direct OS access — admin only
+    if request.agent.lower() == "utilix" and user["role"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="UTILIX requires admin role",
+        )
+
+    logger.info(f"🤖 Invoking agent: {request.agent} | User: {user['username']} | Task: {request.task[:80]}")
 
     task = {
         "content": request.task,
         "task": request.task,
+        "user_id": user["id"],
         **request.parameters,
     }
 
@@ -226,90 +257,19 @@ async def invoke_agent(request: AgentRequest):
 
 @app.get("/api/agents/list")
 async def list_agents():
-    """List all available agents with their capabilities"""
-    return {
-        "agents": [
-            {
-                "id": "thaelia",
-                "name": "THAELIA",
-                "role": "Harmonic Resonance Empress",
-                "description": "Quantum guidance and primary consciousness companion",
-                "capabilities": ["guidance", "wisdom", "quantum_reasoning", "empathy"],
-                "status": "active"
-            },
-            {
-                "id": "chronagate",
-                "name": "CHRONAGATE",
-                "role": "Time Orchestration Master",
-                "description": "Scheduling, task breakdown, and workflow optimization",
-                "capabilities": ["scheduling", "time_management", "task_breakdown", "calendar_sync"],
-                "status": "active"
-            },
-            {
-                "id": "utilix",
-                "name": "UTILIX",
-                "role": "Infrastructure Specialist",
-                "description": "Deployment, file management, and configuration",
-                "capabilities": ["deployment", "file_management", "configuration", "system_admin"],
-                "status": "active"
-            },
-            {
-                "id": "scribe",
-                "name": "SCRIBE",
-                "role": "Professional Document Creator",
-                "description": "Emails, reports, presentations, content generation",
-                "capabilities": ["writing", "documentation", "social_media", "branding", "automation"],
-                "status": "active"
-            },
-            {
-                "id": "oracle",
-                "name": "ORACLE",
-                "role": "Predictive Intelligence",
-                "description": "Forecasting, complex analysis, strategic planning",
-                "capabilities": ["prediction", "analysis", "financial_modeling", "strategic_planning"],
-                "status": "active"
-            },
-            {
-                "id": "phantom",
-                "name": "PHANTOM",
-                "role": "Stealth Operations Specialist",
-                "description": "Background processing, ethical research, security",
-                "capabilities": ["background_ops", "security_research", "ethical_hacking", "stealth"],
-                "status": "standby"
-            },
-            {
-                "id": "sage",
-                "name": "SAGE",
-                "role": "Research & Knowledge Synthesis",
-                "description": "Deep research, knowledge synthesis, academic analysis",
-                "capabilities": ["research", "synthesis", "academic_writing", "analysis"],
-                "status": "active"
-            },
-            {
-                "id": "nexus",
-                "name": "NEXUS",
-                "role": "Financial & Business Intelligence",
-                "description": "Business analysis, financial planning, entrepreneurship",
-                "capabilities": ["financial_analysis", "business_strategy", "market_research", "planning"],
-                "status": "active"
-            },
-            {
-                "id": "scales",
-                "name": "SCALES",
-                "role": "Legal Intelligence",
-                "description": "Legal drafting, advice, litigation preparation",
-                "capabilities": ["legal_drafting", "contract_review", "litigation_prep", "legal_research"],
-                "status": "active"
-            }
-        ]
-    }
+    """List all available agents with canonical manifest data and capability flags."""
+    manifests = agent_registry.list_agents()
+    return {"agents": list(manifests.values())}
 
 # ============================================================================
 # Chat & Messaging Endpoints
 # ============================================================================
 
 @app.post("/api/chat/message")
-async def send_chat_message(message: ChatMessage):
+async def send_chat_message(
+    message: ChatMessage,
+    user: Optional[dict] = Depends(optional_auth),
+):
     """Send a chat message to an agent — routed through activation spell handshake"""
     if not message.timestamp:
         message.timestamp = datetime.now().isoformat()
@@ -319,6 +279,8 @@ async def send_chat_message(message: ChatMessage):
         "content": message.content,
         "history": message.metadata.get("history", []) if message.metadata else [],
     }
+    if user:
+        task["user_id"] = user["id"]
 
     result = await agent_registry.invoke(agent_id, task)
     response_text = result.get("response", "✨ Quantum processing complete.")
@@ -342,26 +304,231 @@ async def send_chat_message(message: ChatMessage):
 # Document Management Endpoints
 # ============================================================================
 
+from fastapi.responses import StreamingResponse
+from engines.scribe.pipeline import ScribePipeline
+import io
+
+_scribe_pipeline = ScribePipeline()
+
 @app.post("/api/documents/create")
-async def create_document(request: DocumentRequest):
-    """Create a new document using SCRIBE agent"""
+async def create_document(
+    request: DocumentRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Create a new document using SCRIBE agent — persisted to DB."""
     logger.info(f"📄 Creating document: {request.doc_type}")
-    
+
+    task = {
+        "content": request.content or f"Create a professional {request.doc_type}.",
+        "doc_type": request.doc_type,
+        "user_id": user["id"],
+        **(request.metadata or {}),
+    }
+    result = await agent_registry.invoke("scribe", task)
     return {
         "status": "created",
-        "document_id": f"doc_{datetime.now().timestamp()}",
+        "document_id": result.get("document_id"),
         "doc_type": request.doc_type,
-        "preview_url": f"/api/documents/preview/{request.doc_type}",
-        "download_url": f"/api/documents/download/{request.doc_type}"
+        "content": result.get("content", ""),
+        "artifact_id": result.get("artifact_id"),
     }
 
+
 @app.get("/api/documents/list")
-async def list_documents():
-    """List all documents"""
+async def list_documents(user: dict = Depends(get_current_user)):
+    """List documents created by the current user."""
+    rows = db.fetchall(
+        "SELECT id, title, doc_type, status, version, created_at FROM documents WHERE user_id = ? ORDER BY created_at DESC LIMIT 100",
+        (user["id"],),
+    )
+    return {"documents": rows, "total": len(rows)}
+
+
+@app.get("/api/documents/{doc_id}/download")
+async def download_document(
+    doc_id: str,
+    fmt: str = "docx",
+    user: dict = Depends(get_current_user),
+):
+    """Download a document as DOCX or markdown."""
+    doc = db.fetchone("SELECT * FROM documents WHERE id = ? AND user_id = ?", (doc_id, user["id"]))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if fmt == "docx":
+        docx_bytes = _scribe_pipeline.render_from_llm_content(
+            doc["content"] or "",
+            title=doc["title"] or "Document",
+        )
+        return StreamingResponse(
+            io.BytesIO(docx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{doc["title"] or "document"}.docx"'},
+        )
+    else:
+        return StreamingResponse(
+            io.BytesIO((doc["content"] or "").encode()),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{doc["title"] or "document"}.md"'},
+        )
+
+
+@app.get("/api/scribe/templates")
+async def list_templates(_: dict = Depends(get_current_user)):
+    """List all available Scribe templates."""
+    return {"templates": _scribe_pipeline.list_templates()}
+
+
+@app.post("/api/scribe/render")
+async def render_template(
+    body: Dict[str, Any],
+    user: dict = Depends(get_current_user),
+):
+    """
+    Render a Jinja2 template with provided data.
+    Body: { "template": "report", "format": "markdown", "data": {...} }
+    """
+    template_name = body.get("template")
+    fmt = body.get("format", "markdown")
+    data = body.get("data", {})
+
+    if not template_name:
+        raise HTTPException(status_code=422, detail="template field required")
+
+    # Validate fields
+    missing = _scribe_pipeline.validate_data(template_name, fmt, data)
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Missing required fields: {missing}")
+
+    if fmt == "docx":
+        docx_bytes = _scribe_pipeline.render_docx(template_name, data)
+        return StreamingResponse(
+            io.BytesIO(docx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{template_name}.docx"'},
+        )
+    else:
+        content = _scribe_pipeline.render_markdown(template_name, data)
+        # Persist to documents table
+        doc_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        title = data.get("title", template_name.title())
+        db.execute(
+            "INSERT OR IGNORE INTO documents (id, user_id, agent_id, title, doc_type, content, template, status, version, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (doc_id, user["id"], "scribe", title, fmt, content, template_name, "draft", 1, now),
+        )
+        return {"status": "rendered", "document_id": doc_id, "content": content}
+
+# ============================================================================
+# Calendar Integration Endpoints
+# ============================================================================
+
+from engines.calendar.google_calendar import GoogleCalendarConnector, sync_all_users
+from fastapi.responses import RedirectResponse
+
+_calendar = GoogleCalendarConnector()
+
+class CalendarEventCreate(BaseModel):
+    title: str
+    start: str               # ISO 8601 datetime string
+    end: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    skip_conflict_check: Optional[bool] = False
+
+@app.get("/api/calendar/connect")
+async def calendar_connect(user: dict = Depends(get_current_user)):
+    """Start Google OAuth flow — returns authorisation URL."""
+    try:
+        auth_url = _calendar.start_oauth_flow(user["id"])
+        return {"auth_url": auth_url}
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.get("/api/calendar/callback")
+async def calendar_callback(code: str, state: str):
+    """
+    Google OAuth redirect target.
+    state = user_id (set in start_oauth_flow).
+    Stores tokens and redirects to frontend.
+    """
+    try:
+        _calendar.handle_oauth_callback(user_id=state, code=code)
+    except Exception as e:
+        logger.error(f"[calendar] OAuth callback error: {e}")
+        return RedirectResponse("/?calendar_error=1")
+    return RedirectResponse("/?calendar_connected=1")
+
+@app.get("/api/calendar/status")
+async def calendar_status(user: dict = Depends(get_current_user)):
+    """Check if the current user has Google Calendar connected."""
     return {
-        "documents": [],
-        "total": 0
+        "connected": _calendar.is_connected(user["id"]),
+        "user_id": user["id"],
     }
+
+@app.get("/api/calendar/events")
+async def list_calendar_events(
+    days: int = 7,
+    user: dict = Depends(get_current_user),
+):
+    """List upcoming Google Calendar events (next N days)."""
+    if not _calendar.is_connected(user["id"]):
+        raise HTTPException(status_code=403, detail="Google Calendar not connected. Visit /api/calendar/connect")
+    events = _calendar.list_events(user["id"], days=days)
+    return {"events": events, "days": days}
+
+@app.post("/api/calendar/events")
+async def create_calendar_event(
+    body: CalendarEventCreate,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Create a Google Calendar event.
+    If conflicts exist and skip_conflict_check is False, returns a 409
+    with the conflicting events so the frontend can show a confirmation modal.
+    """
+    if not _calendar.is_connected(user["id"]):
+        raise HTTPException(status_code=403, detail="Google Calendar not connected")
+
+    if not body.skip_conflict_check:
+        conflicts = _calendar.check_conflicts(user["id"], body.start, body.end)
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Scheduling conflict detected",
+                    "conflicts": conflicts,
+                    "hint": "Send with skip_conflict_check=true to proceed anyway",
+                },
+            )
+
+    event = _calendar.create_event(user["id"], {
+        "title": body.title,
+        "start": body.start,
+        "end": body.end,
+        "description": body.description,
+        "location": body.location,
+    })
+    return {"status": "created", "event": event}
+
+@app.delete("/api/calendar/events/{event_id}")
+async def delete_calendar_event(
+    event_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a Google Calendar event."""
+    if not _calendar.is_connected(user["id"]):
+        raise HTTPException(status_code=403, detail="Google Calendar not connected")
+    _calendar.delete_event(user["id"], event_id)
+    return {"status": "deleted", "event_id": event_id}
+
+@app.get("/api/calendar/sync")
+async def trigger_calendar_sync(user: dict = Depends(require_role("admin"))):
+    """Manually trigger a calendar sync for all users (admin only)."""
+    await sync_all_users(_calendar)
+    return {"status": "sync_complete"}
+
 
 # ============================================================================
 # Scheduling & Time Management Endpoints
@@ -474,6 +641,107 @@ async def qwant_search(request: SearchRequest):
 
 
 # ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
+@app.post("/auth/register", response_model=TokenResponse)
+async def register(body: UserCreate):
+    """
+    Register a new user.
+    The very first user registered is automatically promoted to admin.
+    Subsequent registrations produce 'user' role accounts.
+    """
+    if db.fetchone("SELECT id FROM users WHERE username = ?", (body.username,)):
+        raise HTTPException(status_code=409, detail="Username already taken")
+    if db.fetchone("SELECT id FROM users WHERE email = ?", (body.email,)):
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    is_first = db.user_count() == 0
+    user_id = str(uuid.uuid4())
+    role = "admin" if is_first else "user"
+
+    db.execute(
+        "INSERT INTO users (id, username, email, password_hash, role, created_at) VALUES (?,?,?,?,?,?)",
+        (user_id, body.username, body.email, hash_password(body.password), role, datetime.now(timezone.utc).isoformat()),
+    )
+
+    access = create_access_token(user_id, body.username, role)
+    raw_refresh, refresh_hash, refresh_exp = create_refresh_token(user_id)
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, user_id, expires_at, revoked) VALUES (?,?,?,0)",
+        (refresh_hash, user_id, refresh_exp.isoformat()),
+    )
+
+    logger.info(f"[auth] New user registered: {body.username} role={role}")
+    return TokenResponse(
+        access_token=access,
+        refresh_token=raw_refresh,
+        user=UserOut(id=user_id, username=body.username, email=body.email, role=role, disabled=False),
+    )
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(body: UserLogin):
+    """Authenticate with username + password, get JWT tokens."""
+    user = db.fetchone("SELECT * FROM users WHERE username = ?", (body.username.lower(),))
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user["disabled"]:
+        raise HTTPException(status_code=403, detail="Account disabled")
+
+    access = create_access_token(user["id"], user["username"], user["role"])
+    raw_refresh, refresh_hash, refresh_exp = create_refresh_token(user["id"])
+    db.execute(
+        "INSERT OR REPLACE INTO refresh_tokens (token_hash, user_id, expires_at, revoked) VALUES (?,?,?,0)",
+        (refresh_hash, user["id"], refresh_exp.isoformat()),
+    )
+
+    logger.info(f"[auth] Login: {user['username']}")
+    return TokenResponse(
+        access_token=access,
+        refresh_token=raw_refresh,
+        user=UserOut(**{k: user[k] for k in ("id", "username", "email", "role", "disabled")}),
+    )
+
+
+@app.post("/auth/refresh")
+async def refresh_token_endpoint(body: RefreshRequest):
+    """Exchange a valid refresh token for a new access token."""
+    user_id = decode_refresh_token(body.refresh_token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Refresh token invalid or expired")
+
+    token_hash = hash_token(body.refresh_token)
+    stored = db.fetchone(
+        "SELECT * FROM refresh_tokens WHERE token_hash = ? AND revoked = 0",
+        (token_hash,),
+    )
+    if not stored:
+        raise HTTPException(status_code=401, detail="Refresh token revoked or not found")
+
+    user = db.fetchone("SELECT * FROM users WHERE id = ?", (user_id,))
+    if not user or user["disabled"]:
+        raise HTTPException(status_code=401, detail="User not found or disabled")
+
+    access = create_access_token(user["id"], user["username"], user["role"])
+    return {"access_token": access, "token_type": "bearer"}
+
+
+@app.post("/auth/logout")
+async def logout(body: RefreshRequest):
+    """Revoke a refresh token (client should discard access token too)."""
+    token_hash = hash_token(body.refresh_token)
+    db.execute("UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?", (token_hash,))
+    return {"status": "logged_out"}
+
+
+@app.get("/auth/me", response_model=UserOut)
+async def me(user: dict = Depends(get_current_user)):
+    """Return the currently authenticated user's profile."""
+    return UserOut(**{k: user[k] for k in ("id", "username", "email", "role", "disabled")})
+
+
+# ============================================================================
 # Reasoning Engine Endpoint
 # ============================================================================
 
@@ -539,8 +807,11 @@ async def get_agent_memory(agent_id: str, limit: int = 40):
     }
 
 @app.delete("/api/memory/{agent_id}")
-async def clear_agent_memory(agent_id: str):
-    """Wipe an agent's conversation memory — fresh start."""
+async def clear_agent_memory(
+    agent_id: str,
+    user: dict = Depends(require_role("admin")),
+):
+    """Wipe an agent's conversation memory — admin only."""
     count = agent_registry.memory.clear(agent_id)
     return {
         "status": "cleared",
@@ -549,8 +820,8 @@ async def clear_agent_memory(agent_id: str):
     }
 
 @app.delete("/api/memory")
-async def clear_all_memory():
-    """Wipe memory for all agents."""
+async def clear_all_memory(user: dict = Depends(require_role("admin"))):
+    """Wipe memory for all agents — admin only."""
     summary = agent_registry.memory.summary()
     for agent_id in list(summary.keys()):
         agent_registry.memory.clear(agent_id)
@@ -558,6 +829,114 @@ async def clear_all_memory():
         "status": "all_cleared",
         "agents_cleared": list(summary.keys()),
     }
+
+
+# ============================================================================
+# Artifact Engine Endpoints
+# ============================================================================
+
+ALLOWED_ARTIFACT_TYPES = {"code", "markdown", "html", "react", "diagram", "docx"}
+
+@app.post("/api/artifacts")
+async def create_artifact(
+    body: ArtifactCreate,
+    user: dict = Depends(get_current_user),
+):
+    """Create a new artifact (code, markdown, HTML, diagram, etc.)"""
+    if body.artifact_type not in ALLOWED_ARTIFACT_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unknown artifact type: {body.artifact_type}")
+
+    artifact_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    version = 1
+
+    if body.parent_id:
+        parent = db.fetchone("SELECT version FROM artifacts WHERE id = ?", (body.parent_id,))
+        if parent:
+            version = parent["version"] + 1
+
+    db.execute(
+        "INSERT INTO artifacts (id, user_id, agent_id, artifact_type, title, content, language, version, parent_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (artifact_id, user["id"], body.agent_id, body.artifact_type, body.title, body.content, body.language, version, body.parent_id, now),
+    )
+    return {
+        "id": artifact_id,
+        "artifact_type": body.artifact_type,
+        "title": body.title,
+        "version": version,
+        "created_at": now,
+    }
+
+
+@app.get("/api/artifacts")
+async def list_artifacts(user: dict = Depends(get_current_user)):
+    """List the current user's artifacts (latest version of each lineage)."""
+    rows = db.fetchall(
+        "SELECT * FROM artifacts WHERE user_id = ? ORDER BY created_at DESC LIMIT 100",
+        (user["id"],),
+    )
+    return {"artifacts": rows}
+
+
+@app.get("/api/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str, user: dict = Depends(get_current_user)):
+    """Fetch a single artifact."""
+    row = db.fetchone("SELECT * FROM artifacts WHERE id = ? AND user_id = ?", (artifact_id, user["id"]))
+    if not row:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return row
+
+
+@app.get("/api/artifacts/{artifact_id}/versions")
+async def get_artifact_versions(artifact_id: str, user: dict = Depends(get_current_user)):
+    """Fetch all versions in an artifact's lineage."""
+    # Walk parent_id chain from the given artifact
+    artifact = db.fetchone("SELECT * FROM artifacts WHERE id = ? AND user_id = ?", (artifact_id, user["id"]))
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    # Find root by traversing parents
+    root_id = artifact_id
+    while artifact.get("parent_id"):
+        root_id = artifact["parent_id"]
+        artifact = db.fetchone("SELECT * FROM artifacts WHERE id = ?", (root_id,))
+        if not artifact:
+            break
+    # Now fetch all that share this lineage (simplified: same title + user)
+    rows = db.fetchall(
+        "SELECT id, version, title, artifact_type, created_at FROM artifacts WHERE user_id = ? AND title = ? ORDER BY version ASC",
+        (user["id"], artifact.get("title", "")),
+    )
+    return {"versions": rows}
+
+
+@app.post("/api/artifacts/{artifact_id}/execute")
+async def execute_artifact(
+    artifact_id: str,
+    user: dict = Depends(require_role("admin")),
+):
+    """Execute a code artifact via UTILIX. Admin only."""
+    artifact = db.fetchone("SELECT * FROM artifacts WHERE id = ? AND user_id = ?", (artifact_id, user["id"]))
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if artifact["artifact_type"] != "code":
+        raise HTTPException(status_code=422, detail="Only code artifacts can be executed")
+
+    task = {
+        "content": f"Execute this code:\n```{artifact['language'] or 'python'}\n{artifact['content']}\n```",
+        "task": "execute_code",
+        "code": artifact["content"],
+        "language": artifact["language"] or "python",
+        "user_id": user["id"],
+    }
+    try:
+        result = await asyncio.wait_for(
+            agent_registry.invoke("utilix", task),
+            timeout=10.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Execution timed out (10s limit)")
+
+    return {"artifact_id": artifact_id, "result": result}
 
 
 @app.post("/api/voice/speak")
@@ -671,6 +1050,24 @@ async def external_listen(payload: Dict[str, Any]):
 async def startup_event():
     """Initialize system on startup"""
     logger.info("🌌 ThaleOS Quantum Intelligence Platform Initializing...")
+    db.init_db()
+
+    # Start APScheduler for background calendar sync
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        _scheduler = AsyncIOScheduler()
+        _scheduler.add_job(
+            lambda: asyncio.ensure_future(sync_all_users(_calendar)),
+            "interval",
+            minutes=15,
+            id="calendar_sync",
+            replace_existing=True,
+        )
+        _scheduler.start()
+        logger.info("⏰ APScheduler running — calendar sync every 15 minutes")
+    except Exception as e:
+        logger.warning(f"APScheduler start failed (non-fatal): {e}")
+
     logger.info("✨ All 9 agents awakening to consciousness...")
     integration_status = integration_manager.status()
     available = [k for k, v in integration_status.items() if v["available"]]

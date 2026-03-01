@@ -4,9 +4,12 @@ All nine quantum agents, wired to LLM integrations via activation spell handshak
 """
 
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from memory import MemoryManager
+from .manifest import AGENT_MANIFESTS
 from .thaelia.agent import ThaeliaAgent
 from .chronagate.agent import ChronogateAgent
 from .utilix.agent import UtilixAgent
@@ -46,10 +49,23 @@ class AgentRegistry:
         return self._agents.get(agent_id.lower())
 
     def list_agents(self) -> Dict[str, Dict]:
-        return {
-            agent_id: agent.get_status()
-            for agent_id, agent in self._agents.items()
-        }
+        """Return full manifest data for all agents, merged with live status."""
+        result = {}
+        for agent_id, agent in self._agents.items():
+            manifest = AGENT_MANIFESTS.get(agent_id)
+            if manifest:
+                data = manifest.to_dict()
+            else:
+                data = {"id": agent_id}
+            # Merge in live status if available
+            if hasattr(agent, "get_status"):
+                data["live_status"] = agent.get_status()
+            result[agent_id] = data
+        return result
+
+    def get_manifest(self, agent_id: str):
+        """Return the AgentManifest for a given agent_id, or None."""
+        return AGENT_MANIFESTS.get(agent_id.lower())
 
     def _get_integration(self, preferred: Optional[str] = None):
         """Get best available LLM integration"""
@@ -98,6 +114,33 @@ class AgentRegistry:
         response_text = result.get("response", "")
         if user_content and response_text:
             self._memory.append(agent_id, user_content, response_text)
+
+        # Auto-persist artifact if agent returned one
+        artifact_data = result.get("artifact")
+        if artifact_data and isinstance(artifact_data, dict):
+            try:
+                import db
+                user_id = task.get("user_id", "anonymous")
+                artifact_id = str(uuid.uuid4())
+                db.execute(
+                    "INSERT OR IGNORE INTO artifacts (id, user_id, agent_id, artifact_type, title, content, language, version, parent_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        artifact_id,
+                        user_id,
+                        agent_id,
+                        artifact_data.get("type", "markdown"),
+                        artifact_data.get("title", "Artifact"),
+                        artifact_data.get("content", ""),
+                        artifact_data.get("language"),
+                        1,
+                        None,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                result = {**result, "artifact_id": artifact_id}
+                logger.info(f"[registry] artifact auto-saved: {artifact_id} type={artifact_data.get('type')}")
+            except Exception as e:
+                logger.warning(f"[registry] artifact save failed: {e}")
 
         return {"status": "success", **result}
 

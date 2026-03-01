@@ -4,8 +4,9 @@ Wordsmith of infinite expression. Every sentence tuned to its purpose.
 """
 
 import logging
+import uuid
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("ThaleOS.Agents.SCRIBE")
 
@@ -68,7 +69,6 @@ Help me write with clarity, elegance, and intentional power.
             "social_media_content", "press_releases", "cover_letters",
             "blog_posts", "presentations", "brand_voice", "proofreading",
         ]
-        self._documents: List[Dict] = []
         logger.info("SCRIBE awakened — words flowing at resonant frequency")
 
     def get_system_prompt(self) -> str:
@@ -105,21 +105,35 @@ Help me write with clarity, elegance, and intentional power.
         else:
             response_text = self._fallback_draft(doc_type, content_request)
 
-        doc_record = {
-            "id": f"doc_{datetime.now().timestamp()}",
-            "type": doc_type,
+        doc_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        user_id = task.get("user_id", "anonymous")
+
+        # Persist to DB
+        try:
+            import db
+            db.execute(
+                "INSERT OR IGNORE INTO documents (id, user_id, agent_id, title, doc_type, content, status, version, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (doc_id, user_id, self.agent_id, f"{doc_type.title()} Document", doc_type, response_text, "draft", 1, now),
+            )
+        except Exception as e:
+            logger.warning(f"[scribe] DB persist failed: {e}")
+
+        # Signal an artifact so Canvas shows it
+        artifact = {
+            "type": "markdown",
+            "title": f"{doc_type.title()} — {now[:10]}",
             "content": response_text,
-            "created_at": datetime.now().isoformat(),
         }
-        self._documents.append(doc_record)
 
         return {
             "agent": self.agent_id,
-            "document_id": doc_record["id"],
+            "document_id": doc_id,
             "doc_type": doc_type,
             "response": response_text,
             "content": response_text,
-            "timestamp": doc_record["created_at"],
+            "artifact": artifact,
+            "timestamp": now,
         }
 
     def _fallback_draft(self, doc_type: str, request: str) -> str:
@@ -130,9 +144,6 @@ Help me write with clarity, elegance, and intentional power.
             "to generate full document content. SCRIBE's pen awaits the quantum connection."
         )
 
-    def list_documents(self) -> List[Dict]:
-        return self._documents
-
     def get_status(self) -> Dict[str, Any]:
         return {
             "agent_id": self.agent_id,
@@ -140,6 +151,5 @@ Help me write with clarity, elegance, and intentional power.
             "role": self.role,
             "status": "active",
             "capabilities": self.capabilities,
-            "documents_created": len(self._documents),
             "supported_doc_types": list(DOCUMENT_TEMPLATES.keys()),
         }
