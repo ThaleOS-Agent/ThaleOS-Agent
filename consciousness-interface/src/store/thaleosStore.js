@@ -102,6 +102,43 @@ export const useThaleOSStore = create((set, get) => ({
     }
   },
 
+  reason: async (query, preferredAgent = null) => {
+    try {
+      const response = await axios.post(`${API_URL}/reason`, {
+        query,
+        preferred_agent: preferredAgent,
+      })
+      return response.data
+    } catch (error) {
+      console.error('Reasoning pipeline failed:', error)
+      throw error
+    }
+  },
+
+  search: async (query, type = 'web', count = 5) => {
+    try {
+      const response = await axios.post(`${API_URL}/search`, { query, type, count })
+      return response.data
+    } catch (error) {
+      console.error('Search failed:', error)
+      throw error
+    }
+  },
+
+  sendChat: async (agentId, content) => {
+    try {
+      const response = await axios.post(`${API_URL}/chat/message`, {
+        role: 'user',
+        content,
+        agent: agentId,
+      })
+      return response.data
+    } catch (error) {
+      console.error('Chat failed:', error)
+      throw error
+    }
+  },
+
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
   setTheme: (theme) => set({ theme }),
   updateUserPreferences: (preferences) => set((state) => ({

@@ -42,9 +42,15 @@ function Chat({ onCanvasOpen }) {
   const [inputValue, setInputValue] = useState('')
   const [selectedAgent, setSelectedAgent] = useState('thaelia')
   const [isTyping, setIsTyping] = useState(false)
+  const [reasonMode, setReasonMode] = useState(false)
   const messagesEndRef = useRef(null)
 
-  const { sendMessage, lastMessage } = useWebSocket()
+  const { sendMessage, lastMessage, connect } = useWebSocket()
+
+  // Establish WS connection for this view
+  useEffect(() => {
+    connect()
+  }, [])
 
   useEffect(() => {
     scrollToBottom()
@@ -52,16 +58,27 @@ function Chat({ onCanvasOpen }) {
 
   useEffect(() => {
     if (lastMessage) {
-      const data = JSON.parse(lastMessage.data)
-      if (data.type === 'chat_message' || data.type === 'response') {
-        addMessage({
-          role: 'agent',
-          agent: data.agent || 'thaelia',
-          content: data.response || data.message,
-          timestamp: data.timestamp,
-        })
-        setIsTyping(false)
-      }
+      try {
+        const data = JSON.parse(lastMessage.data)
+        if (data.type === 'response' || data.type === 'chat_message') {
+          addMessage({
+            role: 'agent',
+            agent: data.agent || selectedAgent,
+            content: data.response || data.message,
+            timestamp: data.timestamp || new Date().toISOString(),
+          })
+          setIsTyping(false)
+        } else if (data.type === 'reasoning_response') {
+          const stepsLabel = data.steps ? ` *(${data.steps.join(' → ')})*` : ''
+          addMessage({
+            role: 'agent',
+            agent: data.agent || 'thaelia',
+            content: data.response + (stepsLabel ? `\n\n---\n${stepsLabel}` : ''),
+            timestamp: data.timestamp || new Date().toISOString(),
+          })
+          setIsTyping(false)
+        }
+      } catch (_) { /* ignore non-JSON frames */ }
     }
   }, [lastMessage])
 
@@ -86,22 +103,11 @@ function Chat({ onCanvasOpen }) {
     setInputValue('')
     setIsTyping(true)
 
-    sendMessage(JSON.stringify({
-      type: 'chat',
-      agent: selectedAgent,
-      content: inputValue,
-      timestamp: userMessage.timestamp,
-    }))
-
-    setTimeout(() => {
-      addMessage({
-        role: 'agent',
-        agent: selectedAgent,
-        content: `I've received your message and I'm processing it with quantum consciousness. This would connect to the actual agent logic.`,
-        timestamp: new Date().toISOString(),
-      })
-      setIsTyping(false)
-    }, 2000)
+    sendMessage(JSON.stringify(
+      reasonMode
+        ? { type: 'reason', content: inputValue, timestamp: userMessage.timestamp }
+        : { type: 'chat', agent: selectedAgent, content: inputValue, timestamp: userMessage.timestamp }
+    ))
   }
 
   const handleKeyPress = (e) => {
@@ -223,12 +229,30 @@ function Chat({ onCanvasOpen }) {
         </div>
 
         <div className="p-4 border-t border-white/10 bg-black/20">
+          <div className="flex items-center space-x-2 mb-2">
+            <button
+              onClick={() => setReasonMode(false)}
+              className={`text-xs px-3 py-1 rounded-full transition-all ${!reasonMode ? 'bg-quantum-600 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}
+            >
+              Chat
+            </button>
+            <button
+              onClick={() => setReasonMode(true)}
+              className={`text-xs px-3 py-1 rounded-full transition-all flex items-center space-x-1 ${reasonMode ? 'bg-mystical-600 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>Reason</span>
+            </button>
+            {reasonMode && (
+              <span className="text-[10px] text-mystical-400">Multi-agent reasoning: search → specialist → synthesis</span>
+            )}
+          </div>
           <div className="flex space-x-2">
             <textarea
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder={`Message ${selectedAgent.toUpperCase()}...`}
+              placeholder={reasonMode ? 'Ask anything — I will search, analyse, and synthesise...' : `Message ${selectedAgent.toUpperCase()}...`}
               className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-quantum-500 resize-none"
               rows="1"
             />
