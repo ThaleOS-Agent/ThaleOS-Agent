@@ -1,0 +1,12 @@
+# ============================================
+# ThaléOS Voice Engine - Text to Speech
+# ============================================
+import pyttsx3
+
+def speak(text):
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
+
+if __name__ == "__main__":
+    speak("ThaléOS Gatekeeper is online and awaiting command.")

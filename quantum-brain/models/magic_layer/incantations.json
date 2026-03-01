@@ -1,0 +1,14 @@
+{
+  "cloak_revenant": {
+    "agent": "nil09",
+    "payload": { "mode": "cloak_scan" }
+  },
+  "summon_scribe": {
+    "agent": "scribe",
+    "payload": { "action": "generate_report", "content": "Invoked via spell." }
+  },
+  "invoke_guardian_shield": {
+    "agent": "guardian",
+    "payload": { "action": "activate_shield" }
+  }
+}

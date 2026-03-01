@@ -26,6 +26,7 @@ from integrations import manager as integration_manager
 from integrations.gpt4all.listener import GPT4AllListener
 from integrations.siri.connector import SiriConnector
 from agents import get_registry
+from engines.reasoning.pipeline import ReasoningPipeline
 
 # Configure logging
 logging.basicConfig(
@@ -92,6 +93,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 agent_registry = get_registry(integration_manager)
 siri_connector = SiriConnector()
+reasoning_pipeline = ReasoningPipeline(agent_registry, integration_manager)
 
 
 async def _handle_listener_message(message: dict) -> dict:
@@ -469,6 +471,74 @@ async def qwant_search(request: SearchRequest):
     )
     return results
 
+
+# ============================================================================
+# Reasoning Engine Endpoint
+# ============================================================================
+
+class ReasoningRequest(BaseModel):
+    query: str
+    preferred_agent: Optional[str] = None
+    search: Optional[bool] = None  # None = auto-detect from query
+
+@app.post("/api/reason")
+async def reason(request: ReasoningRequest):
+    """
+    Multi-agent quantum reasoning pipeline.
+    Routes through: web search (if needed) → specialist agent → THAELIA synthesis.
+    Use this for complex questions that benefit from multi-agent collaboration.
+    """
+    result = await reasoning_pipeline.run(
+        query=request.query,
+        preferred_agent=request.preferred_agent,
+        search=request.search,
+    )
+    return {
+        "status": "success",
+        "query": request.query,
+        "response": result["response"],
+        "specialist": result["specialist"],
+        "steps": result["steps"],
+        "search_used": result["search_used"],
+    }
+
+
+# ============================================================================
+# Voice Engine Endpoints
+# ============================================================================
+
+class SpeakRequest(BaseModel):
+    text: str
+    rate: Optional[int] = 175   # words per minute
+    volume: Optional[float] = 1.0
+
+@app.post("/api/voice/speak")
+async def voice_speak(request: SpeakRequest):
+    """
+    Text-to-speech — makes the Mac speak the given text aloud via pyttsx3.
+    Works locally; for remote use pair with /api/siri/message instead.
+    """
+    try:
+        import pyttsx3
+        import asyncio
+
+        def _speak():
+            engine = pyttsx3.init()
+            engine.setProperty("rate", request.rate)
+            engine.setProperty("volume", request.volume)
+            engine.say(request.text)
+            engine.runAndWait()
+            engine.stop()
+
+        # Run blocking TTS in a thread so we don't block the event loop
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _speak)
+        return {"status": "spoken", "text": request.text[:100]}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="pyttsx3 not installed. Run: pip install pyttsx3")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ============================================================================
 # WebSocket Endpoint
 # ============================================================================
@@ -491,17 +561,40 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         while True:
             data = await websocket.receive_text()
             message_data = json.loads(data)
-            
-            # Process message
-            logger.info(f"📨 Received: {message_data}")
-            
-            # Echo back with agent response
-            await manager.send_personal_message({
-                "type": "response",
-                "original": message_data,
-                "response": f"Processing with quantum resonance...",
-                "timestamp": datetime.now().isoformat()
-            }, websocket)
+
+            logger.info(f"📨 WS received from {client_id}: {str(message_data)[:80]}")
+
+            msg_type = message_data.get("type", "chat")
+            content = message_data.get("content", message_data.get("message", ""))
+            agent_id = message_data.get("agent", "thaelia")
+
+            if msg_type == "reason":
+                # Multi-agent reasoning pipeline
+                result = await reasoning_pipeline.run(
+                    query=content,
+                    preferred_agent=message_data.get("preferred_agent"),
+                    search=message_data.get("search"),
+                )
+                await manager.send_personal_message({
+                    "type": "reasoning_response",
+                    "agent": result["specialist"],
+                    "response": result["response"],
+                    "steps": result["steps"],
+                    "search_used": result["search_used"],
+                    "timestamp": datetime.now().isoformat(),
+                }, websocket)
+            else:
+                # Standard chat — route to agent
+                task = {"content": content}
+                result = await agent_registry.invoke(agent_id, task)
+                response_text = result.get("response", "✨ Quantum processing complete.")
+
+                await manager.send_personal_message({
+                    "type": "response",
+                    "agent": agent_id,
+                    "response": response_text,
+                    "timestamp": datetime.now().isoformat(),
+                }, websocket)
             
     except WebSocketDisconnect:
         manager.disconnect(websocket, client_id)
