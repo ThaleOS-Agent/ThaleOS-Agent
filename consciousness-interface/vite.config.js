@@ -2,9 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+// Base path: /ThaleOS-Agent/ on GitHub Pages, / everywhere else
+const base = process.env.GITHUB_PAGES === 'true' ? '/ThaleOS-Agent/' : '/'
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  base,
   
   // Tauri expects a fixed port for development
   server: {

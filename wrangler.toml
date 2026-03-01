@@ -1,0 +1,13 @@
+name = "thaleos-agent"
+compatibility_date = "2024-01-01"
+
+[env.production]
+name = "thaleos-agent"
+
+[env.preview]
+name = "thaleos-agent-preview"
+
+# Cloudflare Pages configuration
+# Build command:   cd consciousness-interface && npm ci && npm run build
+# Build output:    consciousness-interface/dist
+# Root directory:  /
