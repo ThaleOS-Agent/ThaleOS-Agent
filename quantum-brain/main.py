@@ -6,6 +6,9 @@ A scientifically grounded, spiritually inspired AI orchestration system
 Port: 8099
 """
 
+from dotenv import load_dotenv
+load_dotenv()  # loads quantum-brain/.env into os.environ before anything else
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
