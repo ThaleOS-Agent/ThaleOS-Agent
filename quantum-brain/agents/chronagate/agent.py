@@ -108,7 +108,7 @@ Assist me with precision, efficiency, and temporal clarity.
         }
 
     async def process_task(self, task: Dict[str, Any], integration=None) -> Dict[str, Any]:
-        task_type = task.get("type", "schedule")
+        task_type = task.get("type")  # None = natural language, explicit type = direct action
 
         if task_type == "schedule":
             return {"agent": self.agent_id, **self.schedule_task(task)}

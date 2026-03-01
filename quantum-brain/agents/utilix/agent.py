@@ -406,14 +406,36 @@ Assist me with technical precision and zero hesitation.
     # Task Dispatcher — routes natural language commands to the right function
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def process_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_task(self, task: Dict[str, Any], integration=None) -> Dict[str, Any]:
         """
         Route a task to the appropriate computer use function.
         task = { "action": "run_shell", "command": "ls -la" }
+        Or natural language: { "content": "show disk usage" }
         """
         action = task.get("action", "")
-        params = {k: v for k, v in task.items() if k != "action"}
+        content = task.get("content", task.get("task", ""))
+        params = {k: v for k, v in task.items() if k not in ("action", "content", "task")}
 
+        # Natural language — no action specified — route through LLM
+        if not action and content:
+            if integration and integration.is_available():
+                additional_context = (
+                    "You are a system administration and infrastructure expert. "
+                    "Help the user with file operations, shell commands, system info, and computer use. "
+                    "When describing commands or operations, be specific and include exact command syntax. "
+                    "Current working directory: " + os.getcwd()
+                )
+                messages = [{"role": "user", "content": content}]
+                result = await integration.complete(
+                    agent_id=self.agent_id,
+                    messages=messages,
+                    additional_context=additional_context,
+                    temperature=0.3,
+                )
+                return {"agent": self.agent_id, "response": result.get("response", ""), "timestamp": datetime.now().isoformat()}
+            return {"agent": self.agent_id, "response": f"🔧 UTILIX ready. No action specified for: {content}. Available: {list(self._action_map_keys())}", "timestamp": datetime.now().isoformat()}
+
+        # Explicit action — dispatch directly
         action_map = {
             "read_file": self.read_file,
             "write_file": self.write_file,

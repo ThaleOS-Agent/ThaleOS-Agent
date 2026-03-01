@@ -116,6 +116,7 @@ Help me write with clarity, elegance, and intentional power.
             "agent": self.agent_id,
             "document_id": doc_record["id"],
             "doc_type": doc_type,
+            "response": response_text,
             "content": response_text,
             "timestamp": doc_record["created_at"],
         }
