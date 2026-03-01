@@ -64,8 +64,8 @@ Nine specialized AI agents working in harmonic resonance:
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/thaleos.git
-cd thaleos
+git clone https://github.com/ThaleOS-Agent/ThaleOS-Agent.git
+cd ThaleOS-Agent
 ```
 
 2. **Backend Setup**
@@ -190,8 +190,8 @@ sudo sh get-docker.sh
 2. **Deploy ThaleOS**
 ```bash
 # Clone repository
-git clone https://github.com/ThaleOS-Agent/thaleos.git
-cd thaleos
+git clone https://github.com/ThaleOS-Agent/ThaleOS-Agent.git
+cd ThaleOS-Agent
 
 # Create environment file
 cp .env.example .env
@@ -445,10 +445,9 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file.
 
 ## 📞 Support & Contact
 
-- **Documentation**: [https://docs.thaleos.ai](https://docs.thaleos.ai)
-- **Discord**: [https://discord.gg/thaleos](https://discord.gg/thaleos)
-- **Email**: support@thaleos.ai
-- **GitHub Issues**: [Report bugs or request features](https://github.com/yourusername/thaleos/issues)
+- **GitHub Issues**: [Report bugs or request features](https://github.com/ThaleOS-Agent/ThaleOS-Agent/issues)
+- **GitHub Discussions**: [Ask questions & share ideas](https://github.com/ThaleOS-Agent/ThaleOS-Agent/discussions)
+- **Email**: admin@teakanetwork.com
 
 ---
 
