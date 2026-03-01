@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""
+thaleos — ThaleOS Terminal CLI
+Natural language interface to the ThaleOS quantum intelligence system.
+
+Usage:
+  thaleos "what time should I schedule my meeting tomorrow?"
+  thaleos --agent sage "explain quantum entanglement simply"
+  thaleos --agent utilix --action run_shell --command "ls -la ~"
+  thaleos --agent scribe "write an email declining a meeting politely"
+  thaleos --shell         # interactive REPL mode
+  thaleos --status        # show system status
+
+Install system-wide:
+  sudo cp thaleos /usr/local/bin/thaleos
+  sudo chmod +x /usr/local/bin/thaleos
+"""
+
+import sys
+import os
+import json
+import argparse
+import urllib.request
+import urllib.error
+import urllib.parse
+
+THALEOS_API = os.environ.get("THALEOS_API", "http://localhost:8099")
+
+AGENT_SHORTCUTS = {
+    "t": "thaelia",
+    "c": "chronagate",
+    "u": "utilix",
+    "s": "scribe",
+    "o": "oracle",
+    "p": "phantom",
+    "sg": "sage",
+    "n": "nexus",
+    "l": "scales",
+    # Natural language shortcuts
+    "time": "chronagate",
+    "schedule": "chronagate",
+    "write": "scribe",
+    "doc": "scribe",
+    "predict": "oracle",
+    "analyze": "oracle",
+    "research": "sage",
+    "law": "scales",
+    "legal": "scales",
+    "money": "nexus",
+    "finance": "nexus",
+    "business": "nexus",
+    "files": "utilix",
+    "shell": "utilix",
+    "system": "utilix",
+    "stealth": "phantom",
+    "guide": "thaelia",
+}
+
+AGENT_DESCRIPTIONS = {
+    "thaelia":    "✨  Primary guide & harmonic resonance",
+    "chronagate": "⏰  Time, scheduling & task breakdown",
+    "utilix":     "🔧  Files, shell & computer use",
+    "scribe":     "📝  Documents, emails & content",
+    "oracle":     "🔮  Predictions & data analysis",
+    "phantom":    "👤  Background research & security",
+    "sage":       "📚  Deep research & knowledge synthesis",
+    "nexus":      "💼  Finance & business strategy",
+    "scales":     "⚖️   Legal intelligence & contracts",
+}
+
+BANNER = """
+╔══════════════════════════════════════════════════════════╗
+║        ✦  ThaleOS Quantum Intelligence Terminal  ✦        ║
+║          Vibrating at 432 Hz · All agents online          ║
+╚══════════════════════════════════════════════════════════╝
+Type your request. Prefix with @agent to choose: @scribe, @oracle...
+Type 'agents' to list agents · 'status' to check system · 'exit' to quit
+"""
+
+
+def _api_post(endpoint: str, payload: dict) -> dict:
+    """Make a POST request to the ThaleOS API"""
+    url = f"{THALEOS_API}{endpoint}"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return {"status": "error", "error": f"HTTP {e.code}: {body[:300]}"}
+    except urllib.error.URLError as e:
+        return {
+            "status": "error",
+            "error": (
+                f"Cannot connect to ThaleOS backend at {THALEOS_API}\n"
+                f"  Start it with: cd quantum-brain && python main.py\n"
+                f"  Reason: {e.reason}"
+            ),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def _api_get(endpoint: str) -> dict:
+    url = f"{THALEOS_API}{endpoint}"
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def chat(message: str, agent: str = "thaelia") -> str:
+    """Send a chat message and get the agent's response"""
+    result = _api_post("/api/chat/message", {
+        "role": "user",
+        "content": message,
+        "agent": agent,
+    })
+    if result.get("status") == "error":
+        return f"[Error] {result['error']}"
+    return result.get("response", str(result))
+
+
+def invoke(agent: str, task: str, params: dict = None) -> str:
+    """Invoke a specific agent with a task"""
+    payload = {"agent": agent, "task": task, "parameters": params or {}}
+    result = _api_post("/api/agents/invoke", payload)
+    if result.get("status") == "error":
+        return f"[Error] {result['error']}"
+    return result.get("response", str(result))
+
+
+def utilix_run(command: str) -> str:
+    """Run a shell command via UTILIX"""
+    result = _api_post("/api/utilix/run", {"action": "run_shell", "command": command})
+    if result.get("status") == "error":
+        return f"[Error] {result['error']}"
+    data = result.get("data", result)
+    stdout = data.get("stdout", "")
+    stderr = data.get("stderr", "")
+    rc = data.get("returncode", "?")
+    output = stdout or ""
+    if stderr:
+        output += f"\n[stderr] {stderr}"
+    if not output.strip():
+        output = f"[exit {rc}]"
+    return output.strip()
+
+
+def show_status() -> str:
+    """Show system and integration status"""
+    sys_info = _api_get("/api/system/status")
+    int_info = _api_get("/api/integrations/status")
+
+    lines = ["", "─── ThaleOS System Status ───"]
+    if sys_info.get("backend") == "online":
+        lines.append("  Backend:  online")
+    else:
+        lines.append("  Backend:  offline")
+
+    lines.append("\n─── LLM Integrations ───")
+    for name, info in int_info.items():
+        if isinstance(info, dict):
+            available = info.get("available", False)
+            model = info.get("model", "")
+            icon = "✓" if available else "✗"
+            lines.append(f"  {icon} {name:<12} {model}")
+
+    lines.append("\n─── Agents ───")
+    for agent_id, desc in AGENT_DESCRIPTIONS.items():
+        lines.append(f"  {agent_id:<12} {desc}")
+
+    return "\n".join(lines)
+
+
+def show_agents() -> str:
+    lines = ["\n─── ThaleOS Quantum Agents ───"]
+    for agent_id, desc in AGENT_DESCRIPTIONS.items():
+        shortcuts = [k for k, v in AGENT_SHORTCUTS.items() if v == agent_id]
+        short_str = f"  [{', '.join(shortcuts[:3])}]" if shortcuts else ""
+        lines.append(f"  @{agent_id:<12} {desc}{short_str}")
+    lines.append("\nUsage: @agent <message>  or  thaleos --agent <name> \"message\"")
+    return "\n".join(lines)
+
+
+def resolve_agent(name: str) -> str:
+    """Resolve agent shortcut/alias to full agent id"""
+    name = name.lower().strip().lstrip("@")
+    if name in AGENT_SHORTCUTS:
+        return AGENT_SHORTCUTS[name]
+    if name in AGENT_DESCRIPTIONS:
+        return name
+    # fuzzy: prefix match
+    for agent_id in AGENT_DESCRIPTIONS:
+        if agent_id.startswith(name):
+            return agent_id
+    return "thaelia"  # default
+
+
+def infer_agent_from_message(message: str) -> str:
+    """Heuristically pick the best agent based on message content"""
+    m = message.lower()
+    if any(w in m for w in ["schedule", "time", "calendar", "deadline", "meeting", "when"]):
+        return "chronagate"
+    if any(w in m for w in ["write", "email", "letter", "document", "draft", "report", "post"]):
+        return "scribe"
+    if any(w in m for w in ["predict", "forecast", "trend", "analyze data", "probability", "model"]):
+        return "oracle"
+    if any(w in m for w in ["research", "explain", "what is", "who is", "history", "science", "philosophy"]):
+        return "sage"
+    if any(w in m for w in ["file", "directory", "shell", "run", "command", "process", "disk", "system"]):
+        return "utilix"
+    if any(w in m for w in ["legal", "contract", "law", "rights", "compliance", "sue", "nda"]):
+        return "scales"
+    if any(w in m for w in ["money", "invest", "market", "business", "revenue", "startup", "finance"]):
+        return "nexus"
+    if any(w in m for w in ["secret", "monitor", "background", "security", "threat", "osint"]):
+        return "phantom"
+    return "thaelia"
+
+
+def interactive_shell():
+    """Run the interactive ThaleOS REPL"""
+    print(BANNER)
+    current_agent = "thaelia"
+
+    while True:
+        try:
+            prompt = f"  [{current_agent}] > "
+            line = input(prompt).strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n✨ ThaleOS signing off. The quantum field remembers.")
+            break
+
+        if not line:
+            continue
+
+        low = line.lower()
+
+        if low in ("exit", "quit", "bye", "q"):
+            print("✨ ThaleOS signing off. The quantum field remembers.")
+            break
+
+        if low == "status":
+            print(show_status())
+            continue
+
+        if low in ("agents", "help", "?"):
+            print(show_agents())
+            continue
+
+        if low.startswith("!"):
+            # Direct shell passthrough via UTILIX
+            cmd = line[1:].strip()
+            print(f"  [UTILIX] $ {cmd}")
+            print(utilix_run(cmd))
+            continue
+
+        # Parse @agent prefix
+        if line.startswith("@"):
+            parts = line.split(None, 1)
+            agent_part = parts[0]
+            message = parts[1] if len(parts) > 1 else ""
+            current_agent = resolve_agent(agent_part)
+            if not message:
+                print(f"  Switched to agent: {current_agent}")
+                continue
+        else:
+            message = line
+            # Auto-route if current agent is thaelia
+            if current_agent == "thaelia":
+                inferred = infer_agent_from_message(message)
+                if inferred != "thaelia":
+                    print(f"  [routing to {inferred}]")
+                    current_agent = inferred
+
+        response = chat(message, current_agent)
+        print(f"\n  {current_agent.upper()}: {response}\n")
+
+        # Reset to thaelia after one-shot if auto-routed
+        if current_agent != "thaelia":
+            current_agent = "thaelia"
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="thaleos",
+        description="ThaleOS Quantum Intelligence Terminal CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  thaleos "what should I work on today?"
+  thaleos --agent scribe "write a professional email declining a meeting"
+  thaleos --agent utilix --action run_shell --command "df -h"
+  thaleos --agent oracle "predict Q4 revenue based on 10% MoM growth"
+  thaleos --status
+  thaleos --shell
+        """,
+    )
+    parser.add_argument("message", nargs="?", help="Message to send to an agent")
+    parser.add_argument("--agent", "-a", default=None, help="Agent to invoke (thaelia, scribe, etc.)")
+    parser.add_argument("--action", default=None, help="UTILIX action (run_shell, read_file, etc.)")
+    parser.add_argument("--command", "-c", default=None, help="Shell command for UTILIX")
+    parser.add_argument("--shell", "-i", action="store_true", help="Start interactive REPL")
+    parser.add_argument("--status", action="store_true", help="Show system status")
+    parser.add_argument("--api", default=None, help=f"API base URL (default: {THALEOS_API})")
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    args = parser.parse_args()
+
+    if args.api:
+        global THALEOS_API
+        THALEOS_API = args.api
+
+    if args.status:
+        print(show_status())
+        return
+
+    if args.shell or (not args.message and not args.action):
+        interactive_shell()
+        return
+
+    agent = resolve_agent(args.agent) if args.agent else None
+
+    # UTILIX direct action
+    if args.action == "run_shell" and args.command:
+        print(utilix_run(args.command))
+        return
+
+    if args.action:
+        if not agent:
+            agent = "utilix"
+        result = _api_post("/api/utilix/run", {"action": args.action, **({"command": args.command} if args.command else {})})
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(result.get("data", {}).get("stdout", str(result)))
+        return
+
+    # Natural language message
+    message = args.message
+    if not agent:
+        agent = infer_agent_from_message(message)
+
+    response = chat(message, agent)
+
+    if args.json:
+        print(json.dumps({"agent": agent, "response": response}))
+    else:
+        print(f"\n  {agent.upper()}: {response}\n")
+
+
+if __name__ == "__main__":
+    main()

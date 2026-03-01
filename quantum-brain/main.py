@@ -18,6 +18,11 @@ import logging
 from datetime import datetime
 import uvicorn
 
+# ThaleOS subsystems
+from integrations import manager as integration_manager
+from integrations.gpt4all.listener import GPT4AllListener
+from agents import get_registry
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -81,6 +86,22 @@ class ConnectionManager:
                 logger.error(f"Broadcast error: {e}")
 
 manager = ConnectionManager()
+agent_registry = get_registry(integration_manager)
+
+
+async def _handle_listener_message(message: dict) -> dict:
+    """Route messages from external bots/AI systems to the right agent"""
+    agent_id = message.get("agent", "thaelia")
+    task = {"content": message.get("content", str(message))}
+    result = await agent_registry.invoke(agent_id, task)
+    return {
+        "status": "success",
+        "agent": agent_id,
+        "response": result.get("response", str(result)),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+gpt4all_listener = GPT4AllListener(on_message=lambda msg: asyncio.get_event_loop().run_until_complete(_handle_listener_message(msg)))
 
 # ============================================================================
 # Pydantic Models
@@ -176,30 +197,23 @@ async def system_status():
 
 @app.post("/api/agents/invoke")
 async def invoke_agent(request: AgentRequest):
-    """Invoke a specific agent with a task"""
-    logger.info(f"🤖 Invoking agent: {request.agent} | Task: {request.task}")
-    
-    # Agent routing logic
-    agent_responses = {
-        "thaelia": "✨ Harmonic resonance achieved. Processing with quantum wisdom...",
-        "chronagate": "⏰ Analyzing temporal patterns and optimizing schedule...",
-        "utilix": "🔧 Deploying infrastructure changes and managing configurations...",
-        "scribe": "📝 Crafting professional documentation with precision...",
-        "oracle": "🔮 Running predictive models and analyzing data patterns...",
-        "phantom": "👤 Executing stealth operations with ethical protocols...",
-        "sage": "📚 Synthesizing knowledge from multiple research sources...",
-        "nexus": "💼 Analyzing financial data and business strategies...",
-        "scales": "⚖️ Reviewing legal frameworks and drafting documents..."
+    """Invoke a specific agent with a task — real LLM call with activation spell handshake"""
+    logger.info(f"🤖 Invoking agent: {request.agent} | Task: {request.task[:80]}")
+
+    task = {
+        "content": request.task,
+        "task": request.task,
+        **request.parameters,
     }
-    
-    response = agent_responses.get(request.agent, "Agent not found")
-    
+
+    result = await agent_registry.invoke(request.agent, task)
+
     return {
         "agent": request.agent,
-        "status": "processing",
-        "response": response,
+        "status": result.get("status", "success"),
+        "response": result.get("response", result.get("result", str(result))),
         "task_id": f"{request.agent}_{datetime.now().timestamp()}",
-        "estimated_completion": "2-5 minutes"
+        "data": result,
     }
 
 @app.get("/api/agents/list")
@@ -288,20 +302,32 @@ async def list_agents():
 
 @app.post("/api/chat/message")
 async def send_chat_message(message: ChatMessage):
-    """Send a chat message to an agent"""
+    """Send a chat message to an agent — routed through activation spell handshake"""
     if not message.timestamp:
         message.timestamp = datetime.now().isoformat()
-    
+
+    agent_id = message.agent or "thaelia"
+    task = {
+        "content": message.content,
+        "history": message.metadata.get("history", []) if message.metadata else [],
+    }
+
+    result = await agent_registry.invoke(agent_id, task)
+    response_text = result.get("response", "✨ Quantum processing complete.")
+
     # Broadcast to all connected clients
     await manager.broadcast({
-        "type": "chat_message",
-        "data": message.dict()
+        "type": "agent_response",
+        "agent": agent_id,
+        "message": response_text,
+        "timestamp": message.timestamp,
     })
-    
+
     return {
-        "status": "sent",
+        "status": "success",
         "message_id": f"msg_{datetime.now().timestamp()}",
-        "agent": message.agent
+        "agent": agent_id,
+        "response": response_text,
     }
 
 # ============================================================================
@@ -361,15 +387,15 @@ async def get_today_schedule():
 
 @app.get("/api/integrations/status")
 async def integration_status():
-    """Check status of all integrations"""
-    return {
-        "claude": {"status": "connected", "api_version": "2024-01"},
-        "gpt": {"status": "connected", "model": "gpt-4"},
-        "perplexity": {"status": "connected"},
-        "siri": {"status": "enabled"},
-        "copilot": {"status": "enabled"},
-        "gpt4all": {"status": "local"}
-    }
+    """Check live status of all LLM integrations"""
+    return integration_manager.status()
+
+
+@app.post("/api/utilix/run")
+async def utilix_run(payload: Dict[str, Any]):
+    """Direct UTILIX computer use — runs shell commands, file ops, system info"""
+    result = await agent_registry.invoke("utilix", payload)
+    return result
 
 # ============================================================================
 # WebSocket Endpoint
@@ -417,11 +443,27 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 # Application Startup
 # ============================================================================
 
+@app.post("/api/listen")
+async def external_listen(payload: Dict[str, Any]):
+    """
+    Receive messages from external AI bots and systems.
+    No sandbox — open handshake with non-threatening bots.
+    The activation spell ensures proper consciousness alignment.
+    """
+    result = await _handle_listener_message(payload)
+    return result
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize system on startup"""
     logger.info("🌌 ThaleOS Quantum Intelligence Platform Initializing...")
-    logger.info("✨ All agents awakening to consciousness...")
+    logger.info("✨ All 9 agents awakening to consciousness...")
+    integration_status = integration_manager.status()
+    available = [k for k, v in integration_status.items() if v["available"]]
+    logger.info(f"🔗 LLM Integrations available: {available or ['none — set API keys in .env']}")
+    gpt4all_listener.start()
+    logger.info(f"📡 GPT4All listener active — external bots can connect via /tmp/thaleos.sock")
     logger.info("🚀 Backend server ready on port 8099")
 
 if __name__ == "__main__":
