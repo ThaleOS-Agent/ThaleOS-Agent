@@ -15,9 +15,9 @@ logger = logging.getLogger("ThaleOS.Integrations.GPT4All")
 try:
     from gpt4all import GPT4All
     GPT4ALL_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception) as _e:
     GPT4ALL_AVAILABLE = False
-    logger.warning("gpt4all package not installed — run: pip install gpt4all")
+    logger.warning(f"gpt4all unavailable: {_e}")
 
 
 # Default model to download/use if none specified
