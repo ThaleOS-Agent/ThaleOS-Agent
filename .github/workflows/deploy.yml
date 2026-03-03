@@ -15,8 +15,18 @@ permissions:
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
-
-jobs:
+ # ─────────────────────────────────────────
+ jobs:
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Wrangler
+        run: npm install -g wrangler@4.69.0
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler pages deploy dist --project-name=thaleos-agent --commit-dirty=true
+      env:
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}  
   # ─────────────────────────────────────────
   # Build the React frontend
   # ─────────────────────────────────────────
